@@ -1,4 +1,4 @@
-const val DEFAULT_DESTINATION_PATTERN = "/{year}/{month}/{fixedpath}/{filename}{separator}{location}{extension}"
+const val DEFAULT_DESTINATION_PATTERN = "/{year}/{month}-{year}/{fixedpath}/{filename}{separator}{location}{extension}"
 
 data class Arguments (
         val sourceFolder : String,
@@ -39,7 +39,7 @@ fun getCommandLineArguments(args: Array<String>) : Arguments {
                 apiKey = it.substringAfterLast(":", "")
             }
             else -> {
-                appendToLogStream("invalid argument $it found")
+                source = it
             }
         }
     }
@@ -58,16 +58,18 @@ fun showUsage(error: String) {
         println(error)
     }
 
-    println("\nUsage: organizer --source:<Path> --destination:<Path> --movefiles:true|FALSE [--pattern:<patter>]\n" +
-            "valid patterns keywords are :\n" +
-            "{year}\t\t -> date taken year\n" +
-            "{month}\t\t -> date taken month\n" +
-            "{camera}\t -> make and model of the camera\n" +
-            "{filename}\t -> filename without extension\n" +
-            "{extension}\t -> file extension\n" +
-            "{location}\t -> geo location\n" +
-            "{fixedpath}\t -> fixed path based on processed file type\n" +
-            "{separator}\t -> generic separator\n")
+    println("\nUsage: organizer [--source:]<Path> --destination:<Path> --movefiles:true|FALSE [--apikey:<google maps api key>] [--pattern:<patter>]\n" +
+            "\ndefault pattern is:" +
+            "\n\t$DEFAULT_DESTINATION_PATTERN\n" +
+            "\nvalid patterns keywords are :\n" +
+            "\t{year}\t\t -> date taken year\n" +
+            "\t{month}\t\t -> date taken month\n" +
+            "\t{camera}\t -> make and model of the camera\n" +
+            "\t{filename}\t -> filename without extension\n" +
+            "\t{extension}\t -> file extension\n" +
+            "\t{location}\t -> geo location\n" +
+            "\t{fixedpath}\t -> fixed path based on processed file type (ie video for video files)\n" +
+            "\t{separator}\t -> generic separator\n")
 }
 
 fun main(args: Array<String>) {

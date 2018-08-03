@@ -11,7 +11,11 @@ repositories {
 dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     // https://mvnrepository.com/artifact/com.drewnoakes/metadata-extractor
-    compile group: 'com.drewnoakes', name: 'metadata-extractor', version: '2.6.2'
+    compile group: 'com.drewnoakes', name: 'metadata-extractor', version: '2.11.0'
+
+    // google location apis
+    compile 'com.google.maps:google-maps-services:0.2.9'
+    compile 'org.slf4j:slf4j-nop:1.7.25'
 
 }
 

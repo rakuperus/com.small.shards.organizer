@@ -4,6 +4,7 @@ import com.drew.metadata.Metadata
 import com.drew.metadata.exif.ExifIFD0Directory
 import com.drew.metadata.exif.ExifSubIFDDirectory
 import com.drew.metadata.exif.GpsDirectory
+import com.drew.metadata.file.FileSystemDirectory
 import com.drew.metadata.mp4.Mp4Directory
 
 import com.google.maps.GeoApiContext
@@ -13,6 +14,8 @@ import com.google.maps.model.LatLng
 import java.io.File
 import java.io.FileNotFoundException
 import java.nio.file.Files
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.*
 
 const val DEFAULT_SEPARATOR = " - "
@@ -50,6 +53,15 @@ class Mover (
 
     }
 
+    private fun Metadata.dump() {
+        this.directories.forEach { dirs ->
+            appendToLogStream("\n\n${dirs.name}")
+            dirs.tags.forEach {
+                appendToLogStream("${it.tagName} - ${it.description}")
+            }
+        }
+    }
+
     private fun File.moveOrCopy(di : DestinationInformation) {
         val dotLocation = di.filename.lastIndexOf('.')
         val (filename, extension) =
@@ -62,7 +74,7 @@ class Mover (
         // TODO: this is not very clever, regex could do smarter things here
         val destinationFilePath = destinationPattern
                 .replace("{year}", di.year.toString())
-                .replace("{month}", di.month.toString())
+                .replace("{month}", di.month.toString().padStart(2, '0'))
                 .replace("{filename}", filename)
                 .replace("{extension}", extension)
                 .replace("{camera}", di.camera)
@@ -153,7 +165,7 @@ class Mover (
 
     private fun getDateTaken(metaData: Metadata) : Pair<Int, Int> {
 
-        val dateDigitized : Date? =
+        var dateDigitized : Date? =
                 when {
                     metaData.containsDirectoryOfType(ExifSubIFDDirectory::class.java) -> {
                         val exifSubIFDData = metaData.getFirstDirectoryOfType(ExifSubIFDDirectory::class.java)
@@ -165,16 +177,24 @@ class Mover (
 
                         mp4Data.getDate(Mp4Directory.TAG_CREATION_TIME)
                     }
-                    else -> null
+                    else -> {
+                        null
+                    }
                 }
 
-        // TODO: refactor to java.time
-        val cal = Calendar.getInstance()
-        cal.time = dateDigitized
+        if (dateDigitized == null) {
+            if (metaData.containsDirectoryOfType(FileSystemDirectory::class.java)) {
+                val fileSystemData = metaData.getFirstDirectoryOfType(FileSystemDirectory::class.java)
 
-        appendToLogStream("\tretrieved date taken ${ dateDigitized ?: "not found" }")
+                dateDigitized = fileSystemData.getDate(FileSystemDirectory.TAG_FILE_MODIFIED_DATE)
+            }
+        }
 
-        return Pair( cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1 )
+        val localDate = LocalDate.ofInstant(dateDigitized!!.toInstant(), ZoneId.systemDefault())
+
+        appendToLogStream("\tretrieved date taken $dateDigitized")
+
+        return Pair( localDate.year, localDate.monthValue )
     }
 
     private fun getCamera(metaData: Metadata): String {
