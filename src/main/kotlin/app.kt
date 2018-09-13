@@ -1,17 +1,27 @@
-const val DEFAULT_DESTINATION_PATTERN = "/{year}/{month}-{year}/{fixedpath}/{filename}{separator}{location}{extension}"
-
+/**
+ * validated argument data class
+ */
 data class Arguments (
         val sourceFolder : String,
         val destinationFolder: String,
         val destinationPattern : String,
         val moveFiles: Boolean,
-        val apiKey: String
+        val apiKey: String,
+        val debugFile : String
 )
 
+/**
+ * Simple logging method, might be more interesting in the future
+ */
 fun appendToLogStream(message : String) {
     println(message)
 }
 
+const val DEFAULT_DESTINATION_PATTERN = "/{year}/{month}-{year}/{fixedpath}/{filename}{separator}{location}{extension}"
+
+/**
+ * retrieve the command line arguments and turn them into a validated set of options
+ */
 fun getCommandLineArguments(args: Array<String>) : Arguments {
 
     var source  = ""
@@ -19,27 +29,33 @@ fun getCommandLineArguments(args: Array<String>) : Arguments {
     var pattern = DEFAULT_DESTINATION_PATTERN
     var move = false
     var apiKey = ""
+    var debugFile = ""
 
-    args.forEach {
+    args.forEach { argument ->
         when {
-            it.startsWith("--source:", ignoreCase = true) -> {
-                source = it.substringAfter(":", "" )
+            argument.startsWith("--source:", ignoreCase = true) -> {
+                source = argument.substringAfter(":", "" )
             }
-            it.startsWith( "--destination", ignoreCase = true) -> {
-                destination = it.substringAfter(":", "" )
+            argument.startsWith( "--destination", ignoreCase = true) -> {
+                destination = argument.substringAfter(":", "" )
             }
-            it.startsWith( "--movefiles", ignoreCase = true) -> {
-                val moveString = it.substringAfter(":", "")
+            argument.startsWith( "--movefiles", ignoreCase = true) -> {
+                val moveString = argument.substringAfter(":", "")
                 move = moveString.toBoolean()
             }
-            it.startsWith( "--pattern", ignoreCase = true) -> {
-                pattern = it.substringAfterLast(":", DEFAULT_DESTINATION_PATTERN)
+            argument.startsWith( "--pattern", ignoreCase = true) -> {
+                pattern = argument.substringAfterLast(":", DEFAULT_DESTINATION_PATTERN)
             }
-            it.startsWith( "--apikey", ignoreCase = true) -> {
-                apiKey = it.substringAfterLast(":", "")
+            argument.startsWith( "--apikey", ignoreCase = true) -> {
+                apiKey = argument.substringAfterLast(":", "")
+            }
+            argument.startsWith("--debugfile", ignoreCase = true) -> {
+                // this is a debugging only argument, and presented in the usage output
+                debugFile = argument.substringAfterLast(":", "")
             }
             else -> {
-                source = it
+                // source is the default argument
+                source = argument
             }
         }
     }
@@ -48,10 +64,12 @@ fun getCommandLineArguments(args: Array<String>) : Arguments {
     if (source.isEmpty()) throw IllegalArgumentException("missing source argument")
     if (destination.isEmpty()) throw IllegalArgumentException("missing destination argument")
 
-    return Arguments(source, destination, pattern, move, apiKey)
-
+    return Arguments(source, destination, pattern, move, apiKey, debugFile)
 }
 
+/**
+ * print out the way this app is used
+ */
 fun showUsage(error: String) {
 
     if (error.isNotEmpty()) {
@@ -86,6 +104,9 @@ fun main(args: Array<String>) {
         return
     }
 
-    val mover = Mover(validatedArgs.sourceFolder, validatedArgs.destinationFolder, validatedArgs.destinationPattern, validatedArgs.moveFiles, validatedArgs.apiKey)
-    mover.execute()
+    val progressWriter  = ProgressWriter(validatedArgs.debugFile)
+
+    Mover(validatedArgs.sourceFolder, validatedArgs.destinationFolder, validatedArgs.destinationPattern, validatedArgs.moveFiles, validatedArgs.apiKey, progressWriter).execute()
+
+    return
 }
