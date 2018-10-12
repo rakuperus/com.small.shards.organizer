@@ -268,11 +268,26 @@ class Mover (
             if (geoApiRequest.isNotEmpty()) {
                 // TODO: brush up on lambda expressions, cause this is old school
                 for (geoCode in geoApiRequest) {
-                    if (geoCode.types.contains(AddressType.LOCALITY)) {
+                    if (geoCode.types.contains(AddressType.NEIGHBORHOOD)) {
                         location = geoCode.formattedAddress
                         break
+
+                    }
+                    else if (geoCode.types.contains(AddressType.SUBLOCALITY_LEVEL_1)) {
+                        location = geoCode.formattedAddress
+                        // don't break here, because neighborhood is desired
+
+                    } else if (location.contentEquals(LOCATION_INVALID_OR_NOT_FOUND) && geoCode.types.contains(AddressType.LOCALITY)) {
+                        location = geoCode.formattedAddress
+
                     }
                 }
+
+                // unable to find one of the preferred locations, so we just get the first one
+                if (location.contentEquals(LOCATION_INVALID_OR_NOT_FOUND)) {
+                    location = geoApiRequest[0].formattedAddress
+                }
+
             }
 
             latLngCache[cacheKey] = location

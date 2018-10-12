@@ -49,7 +49,7 @@ fun File.moveOrCopy(destinationFolder: File, destinationPattern: String, pathCon
                 .replace("{filename}", filename)
                 .replace("{extension}", extension)
                 .replace("{camera}", config.camera)
-                .replace("{fixedPath}", config.fixedPath)
+                .replace("{fixedpath}", config.fixedPath)
 
         destinationFilePath =
                 if (!config.location.isEmpty()) {
