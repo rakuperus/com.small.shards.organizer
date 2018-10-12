@@ -59,8 +59,12 @@ fun getCommandLineArguments(args: Array<String>) : Arguments {
                 debugFile = argument.substringAfterLast(":", "")
             }
             else -> {
-                // source is the default argument
-                source = argument
+                if (argument.startsWith("--")) {
+                    throw IllegalArgumentException("unknown argument $argument")
+                } else {
+                    // source is the default argument
+                    source = argument
+                }
             }
         }
     }
