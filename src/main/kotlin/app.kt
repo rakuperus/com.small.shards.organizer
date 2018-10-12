@@ -1,3 +1,4 @@
+
 /**
  * validated argument data class
  */
@@ -33,6 +34,10 @@ fun getCommandLineArguments(args: Array<String>) : Arguments {
 
     args.forEach { argument ->
         when {
+            argument.startsWith("--help", ignoreCase = true) -> {
+                // TODO: throwing a generic exception might be a bit easy
+                throw Exception("help required")
+            }
             argument.startsWith("--source:", ignoreCase = true) -> {
                 source = argument.substringAfter(":", "" )
             }
@@ -70,13 +75,13 @@ fun getCommandLineArguments(args: Array<String>) : Arguments {
 /**
  * print out the way this app is used
  */
-fun showUsage(error: String) {
+fun showUsage(error: String = "") {
 
     if (error.isNotEmpty()) {
         println(error)
     }
 
-    println("\nUsage: organizer [--source:]<Path> --destination:<Path> --movefiles:true|FALSE [--apikey:<google maps api key>] [--pattern:<patter>]\n" +
+    println("\nUsage: organizer [--source:]<Path> --destination:<Path> --movefiles:true|FALSE [--apikey:<google maps api key>] [--pattern:<patter>] [--help]\n" +
             "\ndefault pattern is:" +
             "\n\t$DEFAULT_DESTINATION_PATTERN\n" +
             "\nvalid patterns keywords are :\n" +
@@ -102,11 +107,27 @@ fun main(args: Array<String>) {
     } catch (e: IllegalArgumentException) {
         showUsage(e.message.toString())
         return
+
+    } catch (e: Exception) {
+        showUsage()
+        return
+
     }
 
     val progressWriter  = ProgressWriter(validatedArgs.debugFile)
 
-    Mover(validatedArgs.sourceFolder, validatedArgs.destinationFolder, validatedArgs.destinationPattern, validatedArgs.moveFiles, validatedArgs.apiKey, progressWriter).execute()
+    try {
+        Mover(
+                validatedArgs.sourceFolder,
+                validatedArgs.destinationFolder,
+                validatedArgs.destinationPattern,
+                validatedArgs.moveFiles,
+                validatedArgs.apiKey,
+                progressWriter
+        ).execute()
+    } catch (e: java.lang.IllegalArgumentException) {
+        showUsage(e.message.toString())
+    }
 
     return
 }

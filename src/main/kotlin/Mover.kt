@@ -1,4 +1,5 @@
 import com.drew.imaging.ImageMetadataReader
+import com.drew.lang.GeoLocation
 
 import com.drew.metadata.Metadata
 import com.drew.metadata.exif.ExifIFD0Directory
@@ -9,6 +10,7 @@ import com.drew.metadata.mp4.Mp4Directory
 
 import com.google.maps.GeoApiContext
 import com.google.maps.GeocodingApi
+import com.google.maps.model.AddressType
 import com.google.maps.model.LatLng
 
 import java.io.File
@@ -16,6 +18,7 @@ import java.io.FileNotFoundException
 import java.nio.file.Files
 import java.time.LocalDate
 import java.time.ZoneId
+
 
 /**
  * The Mover class is used to move files from a source location to the destination location. It uses
@@ -35,14 +38,16 @@ class Mover (
         private val progressWriter: ProgressWriter
 ) {
     companion object {
-        private const val DEFAULT_SEPARATOR = " - "
+        private const val LOCATION_INVALID_OR_NOT_FOUND = "?"
+        private const val GEO_CACHE_LEVEL_MULTIPLIER = 1000
     }
 
-    private lateinit var destinationFolder  : File
     private var apiContext : GeoApiContext? = null
+    private val latLngCache = HashMap<String, String>()
 
     private var duplicatesFound : Int = 0
     private var filesMoved : Int = 0
+    private var invalidFiles : Int = 0
 
     /**
      * Simple helper function to dump all meta data in the file
@@ -65,82 +70,6 @@ class Mover (
         }
     }
 
-    private fun File.moveOrCopy(di : DestinationInformation) {
-        if (!destinationFolder.exists()) {
-            appendToLogStream("can't move to destination folder because it does not exist")
-            return
-        }
-
-        val destinationFilePath = transformDestinationFromPattern(di)
-
-        val missingFolder = createPatternFolderInDestination(destinationFilePath)
-        if (missingFolder.exists()) {
-            val newFilePath = File("${destinationFolder.path}$destinationFilePath")
-
-            if (newFilePath.exists()) {
-                appendToLogStream("\tdestination already exists, file $newFilePath skipped")
-                duplicatesFound++
-            } else {
-                if (moveFiles) {
-                    this.renameTo(newFilePath)
-                    appendToLogStream("\tfile moved to destination")
-                } else {
-                    Files.copy(this.toPath(), newFilePath.toPath())
-                    appendToLogStream("\tfile copied to destination")
-                }
-
-                filesMoved++
-            }
-        }
-    }
-
-    private fun createPatternFolderInDestination(destinationFilePath: String): File {
-        val fileSeparator = destinationFilePath.lastIndexOf('/')
-        val missingFolderPath = destinationFilePath.substring(0, fileSeparator)
-
-        val fullDestinationFolder = "${destinationFolder.path}$missingFolderPath"
-
-        val missingFolder = File(fullDestinationFolder)
-        if (!missingFolder.exists()) missingFolder.mkdirs()
-
-        return missingFolder
-    }
-
-    private fun transformDestinationFromPattern(di: DestinationInformation): String {
-        val extensionSeparator = di.filename.lastIndexOf('.')
-        val (filename, extension) =
-                if (extensionSeparator > 0) {
-                    Pair(di.filename.substring(0, extensionSeparator), di.filename.substring(extensionSeparator))
-                } else {
-                    Pair(di.filename, "")
-                }
-
-        // TODO: this is not very clever, regex could do smarter things here
-        var destinationFilePath = destinationPattern
-                .replace("{year}", di.year.toString())
-                .replace("{month}", di.month.toString().padStart(2, '0'))
-                .replace("{filename}", filename)
-                .replace("{extension}", extension)
-                .replace("{camera}", di.camera)
-                .replace("{fixedpath}", di.fixedpath)
-
-        destinationFilePath =
-                if (!di.location.isEmpty()) {
-                    destinationFilePath
-                            .replace("{location}", di.location)
-                            .replace("{separator}", di.separator)
-                } else {
-                    destinationFilePath
-                            .replace("{location}", "")
-                            .replace("{separator}", "")
-                }
-
-        destinationFilePath = destinationFilePath
-                .replace("//", "/")
-
-        return destinationFilePath
-    }
-
     /**
      * with this method files are moved or copied from source location to destination location. files are
      * transformed using the destination pattern. the destination pattern uses file metadata to create file
@@ -152,88 +81,102 @@ class Mover (
 
         duplicatesFound = 0
         filesMoved = 0
+        invalidFiles = 0
 
-        destinationFolder = File(destinationPath)
+        val destinationFolder = File(destinationPath)
         if (!destinationFolder.exists()) destinationFolder.mkdirs()
 
         // as described in the API documentation, the context should be used as a singleton
         if (!googleAPIKey.isEmpty())
             apiContext = GeoApiContext.Builder().apiKey(googleAPIKey).build()
 
-        processFolder(source)
+        processFolder(source, destinationFolder)
 
         appendToLogStream("moved or copied $filesMoved files to destintation")
         appendToLogStream("found $duplicatesFound files already existed in destinationFolder")
+        appendToLogStream("$invalidFiles files could not be moved or copied ")
     }
 
     /**
      * process all files in the source folder
      */
-    private fun processFolder(source : File) {
+    private fun processFolder(source : File, destinationFolder : File) {
         appendToLogStream ( "processing folder ${source.name}" )
 
         // process files only, skipping all folders
         source.walk().forEach { file ->
-            if ( file.isFile ) processFile(file)
+            if ( file.isFile ) processFile(file, destinationFolder)
         }
     }
 
     /**
      * process a single file. only image and video files are processed
      */
-    private fun processFile(source: File) {
+    private fun processFile(source: File, destinationFolder: File) {
         val contentType = Files.probeContentType(source.toPath())
         appendToLogStream( "processing file ${source.name} of type $contentType" )
 
         if (!contentType.isNullOrEmpty()) {
-            val di = when {
+            val config = when {
                 contentType == "image/jpeg" ->
-                    getDestinationInformationForFile(source)
+                    getDestinationConfigurationForFile(source)
 
                 contentType.startsWith("video/", true) ->
-                    getDestinationInformationForFile(source, "video", "")
+                    getDestinationConfigurationForFile(source, "video", "")
 
                 else -> null
             }
 
-            if (di != null) source.moveOrCopy(di)
+            if (config != null) {
+                when (source.moveOrCopy(destinationFolder, destinationPattern, config, moveFiles)) {
+                    MoveResults.MOVED, MoveResults.COPIED -> filesMoved++
+                    MoveResults.DUPLICATE -> duplicatesFound++
+                    MoveResults.INVALID -> invalidFiles++
+                }
+            }
         }
 
     }
 
-    private fun getDestinationInformationForFile(source: File, fixedpath : String = "", separator: String = DEFAULT_SEPARATOR) : DestinationInformation {
+    /**
+     * retrieve all information from the source file and combine it into a DestinationPathConfiguration instance
+     */
+    private fun getDestinationConfigurationForFile(source: File, fixedPath : String = "", separator: String = DestinationPathConfiguration.DEFAULT_SEPARATOR) : DestinationPathConfiguration {
         val metaData = ImageMetadataReader.readMetadata(source) as Metadata
 
         val (dateTakenYear, dateTakenMonth) = getDateTaken(metaData)
 
-        return DestinationInformation(
+        return DestinationPathConfiguration(
                 dateTakenYear,
                 dateTakenMonth,
                 source.name,
                 getLocation(metaData),
                 getCamera(metaData),
-                fixedpath = fixedpath,
+                fixedPath = fixedPath,
                 separator = separator
         )
     }
 
     /**
-     * get date taken from metadata specific for the filetype
+     * get date taken from metadata specific for the file type
      */
     private fun getDateTaken(metaData: Metadata) : Pair<Int, Int> {
 
         var dateDigitized =
                 when {
+                    // image file
                     metaData.containsDirectoryOfType(ExifSubIFDDirectory::class.java) -> {
                         val exifSubIFDData = metaData.getFirstDirectoryOfType(ExifSubIFDDirectory::class.java)
 
                         exifSubIFDData.getDate(ExifSubIFDDirectory.TAG_DATETIME_DIGITIZED)
                     }
+                    // move file
                     metaData.containsDirectoryOfType(Mp4Directory::class.java) -> {
                         val mp4Data = metaData.getFirstDirectoryOfType(Mp4Directory::class.java)
 
                         mp4Data.getDate(Mp4Directory.TAG_CREATION_TIME)
                     }
+                    // something without the date we need
                     else -> {
                         null
                     }
@@ -251,6 +194,7 @@ class Mover (
 
         appendToLogStream("\tretrieved date taken $dateDigitized")
 
+        // look mom; tuples
         return Pair( localDate.year, localDate.monthValue )
     }
 
@@ -285,18 +229,14 @@ class Mover (
             if (metaData.containsDirectoryOfType(GpsDirectory::class.java)) {
                 val gpsData = metaData.getFirstDirectoryOfType(GpsDirectory::class.java)
 
-                if (gpsData.geoLocation != null) {
-                    progressWriter.appendLine("${gpsData.geoLocation.latitude}, ${gpsData.geoLocation.longitude}")
-
-                    val geoApiRequest = GeocodingApi.reverseGeocode(apiContext,
-                            LatLng(gpsData.geoLocation.latitude, gpsData.geoLocation.longitude)
-                    ).await()
-
-                    if (geoApiRequest.isNotEmpty())
-                        location = geoApiRequest[0].formattedAddress
+                if(gpsData.geoLocation != null) {
+                    location = getCachedLocation(gpsData.geoLocation)
                 }
 
-                appendToLogStream("\tretrieved GPS location $location")
+                if (location.isNotEmpty())
+                    appendToLogStream("\tretrieved GPS location $location")
+                else
+                    appendToLogStream("\tno GPS location found")
             }
         }
 
@@ -304,15 +244,42 @@ class Mover (
     }
 
     /**
-     * Simple data transporation class used in the destinationFolder pattern matching
+     * try to match the geolocation to a location already in cache
+     * this method was introduced to minimize the number of calls to google APIs
      */
-    data class DestinationInformation(
-            val year : Int,
-            val month: Int,
-            val filename: String,
-            val location: String = "",
-            val camera : String = "",
-            val fixedpath : String = "",
-            val separator : String = DEFAULT_SEPARATOR
-    )
+    private fun getCachedLocation(gpsData: GeoLocation): String {
+        var location = LOCATION_INVALID_OR_NOT_FOUND
+
+        // multiple and round the lat and long for the geo information, removing any insignificant numbers
+        val latMultiplier = (gpsData.latitude * GEO_CACHE_LEVEL_MULTIPLIER).toLong()
+        val lngMultiplier = (gpsData.longitude * GEO_CACHE_LEVEL_MULTIPLIER).toLong()
+
+        // construct cache key from geo multiplier
+        val cacheKey = "$latMultiplier-$lngMultiplier"
+
+        if (latLngCache.containsKey(cacheKey)) {
+            location = latLngCache.getValue(cacheKey)
+        }
+        else {
+            val geoApiRequest = GeocodingApi.reverseGeocode(apiContext,
+                    LatLng(gpsData.latitude, gpsData.longitude)
+            ).await()
+
+            if (geoApiRequest.isNotEmpty()) {
+                // TODO: brush up on lambda expressions, cause this is old school
+                for (geoCode in geoApiRequest) {
+                    if (geoCode.types.contains(AddressType.LOCALITY)) {
+                        location = geoCode.formattedAddress
+                        break
+                    }
+                }
+            }
+
+            latLngCache[cacheKey] = location
+        }
+
+        progressWriter.appendLine("${gpsData.latitude}, ${gpsData.longitude}, $location")
+
+        return location
+    }
 }
