@@ -1,9 +1,8 @@
-import org.junit.jupiter.api.Assertions
-import org.junit.jupiter.api.Test
 import java.lang.Exception
 import java.lang.IllegalArgumentException
 
 class AppKtTest {
+/*
     @Test
     fun testGetCommandLineArguments() {
 
@@ -70,5 +69,5 @@ class AppKtTest {
         Assertions.assertEquals(debugFile, result.debugFile)
 
     }
-
+*/
 }

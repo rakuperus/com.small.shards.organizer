@@ -11,6 +11,7 @@ import com.drew.metadata.mp4.Mp4Directory
 import com.google.maps.GeoApiContext
 import com.google.maps.GeocodingApi
 import com.google.maps.model.AddressType
+import com.google.maps.model.GeocodingResult
 import com.google.maps.model.LatLng
 
 import java.io.File
@@ -19,12 +20,11 @@ import java.nio.file.Files
 import java.time.LocalDate
 import java.time.ZoneId
 
-
 /**
  * The Mover class is used to move files from a source location to the destination location. It uses
  * the @destinationPattern to determine how the files should be moved.
  *
- * Based on the switch @moveFiles the mover determines if files should actualy be moved or just be copied
+ * Based on the switch @moveFiles the mover determines if files should actually be moved or just be copied
  * to the new location.
  *
  * The Mover class uses google API's to determine location data from the lat/long information in the actual files.
@@ -37,17 +37,13 @@ class Mover (
         private val googleAPIKey : String = "",
         private val progressWriter: ProgressWriter
 ) {
-    companion object {
-        private const val LOCATION_INVALID_OR_NOT_FOUND = "?"
-        private const val GEO_CACHE_LEVEL_MULTIPLIER = 1000
-    }
-
     private var apiContext : GeoApiContext? = null
     private val latLngCache = HashMap<String, String>()
 
     private var duplicatesFound : Int = 0
     private var filesMoved : Int = 0
     private var invalidFiles : Int = 0
+    private var skippedFiles: Int = 0
 
     /**
      * Simple helper function to dump all meta data in the file
@@ -82,6 +78,7 @@ class Mover (
         duplicatesFound = 0
         filesMoved = 0
         invalidFiles = 0
+        skippedFiles = 0
 
         val destinationFolder = File(destinationPath)
         if (!destinationFolder.exists()) destinationFolder.mkdirs()
@@ -95,6 +92,7 @@ class Mover (
         appendToLogStream("moved or copied $filesMoved files to destintation")
         appendToLogStream("found $duplicatesFound files already existed in destinationFolder")
         appendToLogStream("$invalidFiles files could not be moved or copied ")
+        appendToLogStream("$skippedFiles files where ignored")
     }
 
     /**
@@ -105,7 +103,12 @@ class Mover (
 
         // process files only, skipping all folders
         source.walk().forEach { file ->
-            if ( file.isFile ) processFile(file, destinationFolder)
+            try {
+                if (file.isFile) processFile(file, destinationFolder)
+            } catch (e: Exception) {
+                appendToLogStream("failed to process file '${file.name}' because of ${e.message}")
+                invalidFiles++
+            }
         }
     }
 
@@ -121,6 +124,9 @@ class Mover (
                 contentType == "image/jpeg" ->
                     getDestinationConfigurationForFile(source)
 
+                contentType == "image/png" ->
+                    getDestinationConfigurationForFile(source)
+
                 contentType.startsWith("video/", true) ->
                     getDestinationConfigurationForFile(source, "video", "")
 
@@ -133,6 +139,9 @@ class Mover (
                     MoveResults.DUPLICATE -> duplicatesFound++
                     MoveResults.INVALID -> invalidFiles++
                 }
+            } else {
+                appendToLogStream("file ${source.name} was skipped")
+                skippedFiles++
             }
         }
 
@@ -243,13 +252,16 @@ class Mover (
         return location
     }
 
+    companion object {
+        private const val LOCATION_INVALID_OR_NOT_FOUND = "?"
+        private const val GEO_CACHE_LEVEL_MULTIPLIER = 1000
+    }
+
     /**
      * try to match the geolocation to a location already in cache
      * this method was introduced to minimize the number of calls to google APIs
      */
     private fun getCachedLocation(gpsData: GeoLocation): String {
-        var location = LOCATION_INVALID_OR_NOT_FOUND
-
         // multiple and round the lat and long for the geo information, removing any insignificant numbers
         val latMultiplier = (gpsData.latitude * GEO_CACHE_LEVEL_MULTIPLIER).toLong()
         val lngMultiplier = (gpsData.longitude * GEO_CACHE_LEVEL_MULTIPLIER).toLong()
@@ -257,43 +269,51 @@ class Mover (
         // construct cache key from geo multiplier
         val cacheKey = "$latMultiplier-$lngMultiplier"
 
-        if (latLngCache.containsKey(cacheKey)) {
-            location = latLngCache.getValue(cacheKey)
-        }
-        else {
+        if (!latLngCache.containsKey(cacheKey)) {
             val geoApiRequest = GeocodingApi.reverseGeocode(apiContext,
                     LatLng(gpsData.latitude, gpsData.longitude)
             ).await()
 
-            if (geoApiRequest.isNotEmpty()) {
-                // TODO: brush up on lambda expressions, cause this is old school
-                for (geoCode in geoApiRequest) {
-                    if (geoCode.types.contains(AddressType.NEIGHBORHOOD)) {
-                        location = geoCode.formattedAddress
-                        break
-
-                    }
-                    else if (geoCode.types.contains(AddressType.SUBLOCALITY_LEVEL_1)) {
-                        location = geoCode.formattedAddress
-                        // don't break here, because neighborhood is desired
-
-                    } else if (location.contentEquals(LOCATION_INVALID_OR_NOT_FOUND) && geoCode.types.contains(AddressType.LOCALITY)) {
-                        location = geoCode.formattedAddress
-
-                    }
-                }
-
-                // unable to find one of the preferred locations, so we just get the first one
-                if (location.contentEquals(LOCATION_INVALID_OR_NOT_FOUND)) {
-                    location = geoApiRequest[0].formattedAddress
-                }
-
-            }
-
-            latLngCache[cacheKey] = location
+            latLngCache[cacheKey] = getBestLocationDescriptionForGeoRequest(geoApiRequest)
         }
 
-        progressWriter.appendLine("${gpsData.latitude}, ${gpsData.longitude}, $location")
+        progressWriter.appendLine("${gpsData.latitude}, ${gpsData.longitude}, ${latLngCache.getValue(cacheKey)}")
+
+        return latLngCache.getValue(cacheKey)
+    }
+
+    /**
+     * determine the 'best' description in the location array retrieved from the Geo API (for our purposes)
+     * 1 - Neighborhood
+     * 2 - Sub locality level 1
+     * 3 - Locality
+     * 4 - default value LOCATION_INVALID_OR_NOT_FOUND
+     */
+    private fun getBestLocationDescriptionForGeoRequest(geoApiRequest: Array<GeocodingResult>): String {
+        var location = LOCATION_INVALID_OR_NOT_FOUND
+
+        if (geoApiRequest.isNotEmpty()) {
+
+            for (geoCode in geoApiRequest) {
+                if (geoCode.types.contains(AddressType.NEIGHBORHOOD)) {
+                    location = geoCode.formattedAddress
+                    break
+
+                } else if (geoCode.types.contains(AddressType.SUBLOCALITY_LEVEL_1)) {
+                    location = geoCode.formattedAddress
+                    // don't break here, because neighborhood is desired
+
+                } else if (location.contentEquals(LOCATION_INVALID_OR_NOT_FOUND) && geoCode.types.contains(AddressType.LOCALITY)) {
+                    location = geoCode.formattedAddress
+                }
+            }
+
+            // unable to find one of the preferred locations, so we just get the first one
+            if (location.contentEquals(LOCATION_INVALID_OR_NOT_FOUND)) {
+                location = geoApiRequest[0].formattedAddress
+            }
+
+        }
 
         return location
     }
