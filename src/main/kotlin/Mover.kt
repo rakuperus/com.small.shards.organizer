@@ -116,7 +116,14 @@ class Mover (
      * process a single file. only image and video files are processed
      */
     private fun processFile(source: File, destinationFolder: File) {
-        val contentType = Files.probeContentType(source.toPath())
+        val probedType = Files.probeContentType(source.toPath())
+
+        val contentType = if (probedType.isNullOrEmpty() && source.extension.endsWith("mts", true)) {
+            "video/mts"
+        } else {
+            probedType
+        }
+
         appendToLogStream( "processing file ${source.name} of type $contentType" )
 
         if (!contentType.isNullOrEmpty()) {
@@ -151,19 +158,35 @@ class Mover (
      * retrieve all information from the source file and combine it into a DestinationPathConfiguration instance
      */
     private fun getDestinationConfigurationForFile(source: File, fixedPath : String = "", separator: String = DestinationPathConfiguration.DEFAULT_SEPARATOR) : DestinationPathConfiguration {
-        val metaData = ImageMetadataReader.readMetadata(source) as Metadata
+        try {
+            val metaData = ImageMetadataReader.readMetadata(source) as Metadata
 
-        val (dateTakenYear, dateTakenMonth) = getDateTaken(metaData)
+            val (dateTakenYear, dateTakenMonth) = getDateTaken(metaData)
 
-        return DestinationPathConfiguration(
-                dateTakenYear,
-                dateTakenMonth,
-                source.name,
-                getLocation(metaData),
-                getCamera(metaData),
-                fixedPath = fixedPath,
-                separator = separator
-        )
+            return DestinationPathConfiguration(
+                    dateTakenYear,
+                    dateTakenMonth,
+                    source.name,
+                    getLocation(metaData),
+                    getCamera(metaData),
+                    fixedPath = fixedPath,
+                    separator = separator
+            )
+
+        } catch ( e : com.drew.imaging.ImageProcessingException ) {
+            // metadata reader was unable to get file information, use the ultimate fallback
+            val lastModifiedDate = java.util.Date (source.lastModified() )
+            val lastModifiedYear = lastModifiedDate.year + 1900
+
+            // TODO : fix the date stuff, this is to hacky
+            return DestinationPathConfiguration(
+                    lastModifiedYear,
+                    lastModifiedDate.month,
+                    source.name,
+                    fixedPath = fixedPath,
+                    separator = separator
+            )
+        }
     }
 
     /**
