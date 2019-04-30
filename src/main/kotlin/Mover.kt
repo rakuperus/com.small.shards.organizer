@@ -177,11 +177,12 @@ class Mover (
             // metadata reader was unable to get file information, use the ultimate fallback
             val lastModifiedDate = java.util.Date (source.lastModified() )
             val lastModifiedYear = lastModifiedDate.year + 1900
+            val lastModifiedMonth = lastModifiedDate.month + 1
 
             // TODO : fix the date stuff, this is to hacky
             return DestinationPathConfiguration(
                     lastModifiedYear,
-                    lastModifiedDate.month,
+                    lastModifiedMonth,
                     source.name,
                     fixedPath = fixedPath,
                     separator = separator
